@@ -32,6 +32,7 @@ const rateLimitConfig = {
 
 let lastRequestTime = Date.now();
 let isRunning = true;
+let cycleCount = 1;
 
 // Handle CTRL+C to gracefully stop the script
 process.on('SIGINT', () => {
@@ -204,7 +205,6 @@ async function reportUsage(wallet, options, retryCount = 0) {
       return reportUsage(wallet, options, retryCount + 1);
     }
     
-    // Log the error but continue execution
     console.log(chalk.yellow('⚠️ Usage report issue, continuing execution...'));
   }
 }
@@ -231,7 +231,7 @@ async function processAgentCycle(wallet, agentId, agentName, useProxy) {
     }
 
     const nanya = await sendRandomQuestion(agentId, axiosInstance);
-    
+
     if (nanya) {
       console.log(chalk.cyan('❓ Question:'), chalk.bold(nanya.question));
       console.log(chalk.green('💡 Answer:'), chalk.italic(nanya?.response?.content ?? ''));
@@ -241,28 +241,41 @@ async function processAgentCycle(wallet, agentId, agentName, useProxy) {
         question: nanya.question,
         response: nanya?.response?.content ?? 'No answer'
       });
+
+      return true; // Indicate that the agent has responded, so we can skip the others
     }
   } catch (error) {
     console.error(chalk.red('⚠️ Error in agent cycle:'), error.message);
   }
+
+  return false; // If no response, return false
 }
 
 async function startContinuousProcess(wallet, useProxy) {
   console.log(chalk.blue(`\n📌 Processing wallet: ${wallet}`));
   console.log(chalk.yellow('Press Ctrl+C to stop the script\n'));
 
-  let cycleCount = 1;
-
   while (isRunning) {
     console.log(chalk.magenta(`\n🔄 Cycle #${cycleCount}`));
     console.log(chalk.dim('----------------------------------------'));
+
+    let agentResponded = false; // Flag to track if an agent has responded in this cycle
 
     for (const [agentId, agentName] of Object.entries(agents)) {
       if (!isRunning) break;
       
       console.log(chalk.magenta(`\n🤖 Using Agent: ${agentName}`));
-      await processAgentCycle(wallet, agentId, agentName, useProxy);
-      
+
+      // Only process the next agent if the previous agent didn't respond
+      if (!agentResponded) {
+        agentResponded = await processAgentCycle(wallet, agentId, agentName, useProxy);
+      }
+
+      if (agentResponded) {
+        console.log(chalk.yellow('✅ One agent has responded, skipping the rest of the agents...'));
+        break; // Skip the remaining agents in this cycle
+      }
+
       if (isRunning) {
         console.log(chalk.yellow(`⏳ Waiting ${rateLimitConfig.intervalBetweenCycles/1000} seconds before next interaction...`));
         await sleep(rateLimitConfig.intervalBetweenCycles);
@@ -270,6 +283,13 @@ async function startContinuousProcess(wallet, useProxy) {
     }
 
     cycleCount++;
+
+    if (cycleCount > 25) {
+      console.log(chalk.yellow('⏳ Bot is going to sleep for 24 hours...'));
+      await sleep(24 * 60 * 60 * 1000);  // 24 hours sleep
+      cycleCount = 1; // Reset cycle count after 24 hours of sleep
+    }
+
     console.log(chalk.dim('----------------------------------------'));
   }
 }
